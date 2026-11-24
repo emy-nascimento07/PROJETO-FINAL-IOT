@@ -2,10 +2,11 @@ const express = require('express');
 const path = require('path');
 
 const app = express();
-const PORT = 3000;
-const TIMEOUT_OFFLINE_MS = 10000; // 10s sem telemetria = OFFLINE
+const PORT = 3000
+;
 const MAX_HISTORICO = 40;
 const MAX_LOGS = 60;
+const TIMEOUT_OFFLINE_MS = 10000; // 10 segundos sem heartbeat = OFFLINE
 
 app.use(express.json());
 
@@ -193,7 +194,7 @@ app.post('/api/telemetria', (req, res) => {
 });
 
 // ============================================================================
-// POST /api/comando - Dispara Macro Global ou Comando Individual via Dashboard
+// POST /api/comando - Comando Individual por Card (grupo específico)
 // ============================================================================
 app.post('/api/comando', (req, res) => {
   const { comando, alvo } = req.body || {};
@@ -203,16 +204,7 @@ app.post('/api/comando', (req, res) => {
     return res.status(400).json({ erro: 'Comando inválido. Use LIGAR ou PARAR.' });
   }
 
-  if (!alvo || alvo === 'TODOS') {
-    modoAula = cmd === 'LIGAR' ? 'ATIVA' : 'ENCERRADA';
-    Object.keys(comandosPendentes).forEach((gId) => {
-      comandosPendentes[gId] = cmd;
-    });
-    registrarLog('MACRO', 'DASHBOARD', `Macro Global "${cmd}" acionada para todas as 7 bancadas.`);
-    return res.json({ status: 'ok', modo_aula: modoAula, comando: cmd, alvo: 'TODOS' });
-  }
-
-  const grupoAlvo = String(alvo).toLowerCase().trim();
+  const grupoAlvo = String(alvo || '').toLowerCase().trim();
   if (!bancadas[grupoAlvo]) {
     return res.status(404).json({ erro: 'Grupo alvo não encontrado.' });
   }
@@ -223,7 +215,58 @@ app.post('/api/comando', (req, res) => {
 });
 
 // ============================================================================
-// GET /api/dados - Fornece estado consolidado para o Dashboard Offline
+// POST /api/comando-geral - Macro Global via botão do Dashboard (LIGAR/PARAR TUDO)
+// ============================================================================
+app.post('/api/comando-geral', (req, res) => {
+  const { comando } = req.body || {};
+  const cmd = String(comando || '').toUpperCase().trim();
+
+  if (cmd !== 'LIGAR' && cmd !== 'PARAR') {
+    return res.status(400).json({ erro: 'Comando inválido. Use LIGAR ou PARAR.' });
+  }
+
+  modoAula = cmd === 'LIGAR' ? 'ATIVA' : 'ENCERRADA';
+  Object.keys(comandosPendentes).forEach((gId) => {
+    comandosPendentes[gId] = cmd;
+  });
+
+  registrarLog('MACRO', 'DASHBOARD', `Macro Global "${cmd}" acionada para todas as 7 bancadas. Modo: ${modoAula}`);
+  return res.json({ status: 'ok', modo_aula: modoAula, comando: cmd, alvo: 'TODOS' });
+});
+
+// ============================================================================
+// GET /api/status-geral - Fornece estado consolidado para o Dashboard
+// ============================================================================
+app.get('/api/status-geral', (req, res) => {
+  const agoraMs = Date.now();
+  let onlineCount = 0;
+
+  const gruposFormatados = {};
+  Object.entries(bancadas).forEach(([id, b]) => {
+    const online = b.ultimo_contato_ms > 0 && (agoraMs - b.ultimo_contato_ms) <= TIMEOUT_OFFLINE_MS;
+    if (online) onlineCount++;
+    gruposFormatados[id] = {
+      ...b,
+      nome: b.nome_subsistema.replace(/_/g, ' '),
+      online
+    };
+  });
+
+  const eficiencia_global = Math.round((onlineCount / 7) * 100);
+
+  res.json({
+    modo_aula: modoAula,
+    eficiencia_global,
+    bancadas_online: onlineCount,
+    servidor_hora: new Date(agoraMs).toLocaleTimeString('pt-BR', { hour12: false }),
+    grupos: gruposFormatados,
+    historico: historicoTelemetria,
+    logs: logsEventos
+  });
+});
+
+// ============================================================================
+// GET /api/dados - Alias mantido para compatibilidade
 // ============================================================================
 app.get('/api/dados', (req, res) => {
   const agoraMs = Date.now();
@@ -244,5 +287,5 @@ app.get('/api/dados', (req, res) => {
 registrarLog('INFO', 'SISTEMA', 'Servidor Console Mestre (Grupo 07) iniciado na LAN.');
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Console Mestre rodando em http://0.0.0.0:${PORT}`);
+  console.log(`Console Mestre rodando em http://0.0.0.0:${PORT} (acessível na LAN inteira)`);
 });
