@@ -4,9 +4,10 @@
 #include <DHT.h>
 
 // Configurações de Rede
-const char* ssid = "SENAI-DEV2";
-const char* password = "desenvolvimento";
-const char* serverUrl = "http://192.168.56.1:3000/api/telemetria";
+const char *ssid = "SENAI-DEV2";
+const char *password = "desenvolvimento";
+// LEMBRE-SE: Troque IP_DO_SERVIDOR pelo IPv4 do seu computador (ex: 192.168.0.105)
+const char *serverUrl = "http://IP_DO_SERVIDOR:3000/api/telemetria";
 
 // Pinagem conforme Mapa de Hardware
 #define PINO_DHT 4
@@ -21,12 +22,33 @@ DHT dht(PINO_DHT, DHT22);
 void atualizarSaidasFisicas();
 void enviarTelemetria(bool comandoManual);
 
-bool aulaAtiva = true; // Estado inicial: MODO AULA ATIVA
+// Variáveis voláteis para funcionar dentro da interrupção instantânea
+volatile bool aulaAtiva = true;
+volatile bool cliqueDetectado = false;
+volatile unsigned long ultimaInterrupcao = 0;
 
-bool ultimoEstadoBotao = HIGH;
 unsigned long ultimoEnvio = 0;
+unsigned long ultimoClique = 0;
 
-void setup() {
+// Função executada instantaneamente pelo hardware ao apertar o botão
+void IRAM_ATTR aoPressionarBotao()
+{
+  unsigned long agora = millis();
+  if (agora - ultimaInterrupcao > 250)
+  {
+    aulaAtiva = !aulaAtiva;
+    cliqueDetectado = true;
+    ultimaInterrupcao = agora;
+
+    // Muda os LEDs e o Relé no exato microssegundo do clique
+    digitalWrite(PINO_LED_VERDE, aulaAtiva ? HIGH : LOW);
+    digitalWrite(PINO_LED_VERMELHO, aulaAtiva ? LOW : HIGH);
+    digitalWrite(PINO_RELE, aulaAtiva ? HIGH : LOW);
+  }
+}
+
+void setup()
+{
   Serial.begin(115200);
   dht.begin();
 
@@ -37,63 +59,75 @@ void setup() {
 
   atualizarSaidasFisicas();
 
+  // Ativa a interrupção instantânea no pino do botão
+  attachInterrupt(digitalPinToInterrupt(PINO_BOTAO), aoPressionarBotao, FALLING);
+
   WiFi.begin(ssid, password);
   Serial.print("Conectando ao Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED)
+  {
     delay(500);
     Serial.print(".");
   }
   Serial.println("\nConectado! IP: " + WiFi.localIP().toString());
 }
 
-void loop() {
-  // 1. Leitura do Botão Físico (Chave Geral)
-  bool estadoBotao = digitalRead(PINO_BOTAO);
-  if (ultimoEstadoBotao == HIGH && estadoBotao == LOW) {
-    delay(50); // Debounce
-    if (digitalRead(PINO_BOTAO) == LOW) {
-      aulaAtiva = !aulaAtiva; // Alterna estado
-      atualizarSaidasFisicas();
-      enviarTelemetria(true); // Envia imediatamente a mudança de estado
-    }
+void loop()
+{
+  // 1. Se o botão foi pressionado, avisa o servidor imediatamente
+  if (cliqueDetectado)
+  {
+    cliqueDetectado = false;
+    ultimoClique = millis();
+    enviarTelemetria(true);
+    ultimoEnvio = millis();
   }
-  ultimoEstadoBotao = estadoBotao;
 
-  // 2. Envio periódico de telemetria a cada 2 segundos
-  if (millis() - ultimoEnvio > 2000) {
+  // 2. Envio periódico a cada 2 segundos
+  if (millis() - ultimoEnvio > 2000)
+  {
     ultimoEnvio = millis();
     enviarTelemetria(false);
   }
 }
 
-void atualizarSaidasFisicas() {
-  if (aulaAtiva) {
+void atualizarSaidasFisicas()
+{
+  if (aulaAtiva)
+  {
     digitalWrite(PINO_LED_VERDE, HIGH);
     digitalWrite(PINO_LED_VERMELHO, LOW);
-    digitalWrite(PINO_RELE, HIGH); // Liga alimentação da mesa
-  } else {
+    digitalWrite(PINO_RELE, HIGH);
+  }
+  else
+  {
     digitalWrite(PINO_LED_VERDE, LOW);
     digitalWrite(PINO_LED_VERMELHO, HIGH);
-    digitalWrite(PINO_RELE, LOW);  // Desliga mesa
+    digitalWrite(PINO_RELE, LOW);
   }
 }
 
-void enviarTelemetria(bool comandoManual) {
-  if (WiFi.status() != WL_CONNECTED) return;
+void enviarTelemetria(bool comandoManual)
+{
+  if (WiFi.status() != WL_CONNECTED)
+    return;
 
   float temp = dht.readTemperature();
   float umid = dht.readHumidity();
   int luzBruta = analogRead(PINO_LDR);
   int luzPorcentagem = map(luzBruta, 0, 4095, 0, 100);
 
-  if (isnan(temp)) temp = 24.0;
-  if (isnan(umid)) umid = 50.0;
+  if (isnan(temp))
+    temp = 24.0;
+  if (isnan(umid))
+    umid = 50.0;
 
   HTTPClient http;
+  http.setTimeout(800); // Evita que o Wi-Fi trave o código por muito tempo
   http.begin(serverUrl);
   http.addHeader("Content-Type", "application/json");
 
-  StaticJsonDocument<256> doc;
+  JsonDocument doc;
   doc["grupo"] = 7;
   doc["nome"] = "Central Mestre (Prof.)";
   doc["temperatura"] = temp;
@@ -107,16 +141,19 @@ void enviarTelemetria(bool comandoManual) {
 
   int httpResponseCode = http.POST(jsonString);
 
-  // Lê resposta do servidor (caso o professor clique no botão do Dashboard Web)
-  if (httpResponseCode > 0) {
+  // Só aceita mudança do servidor se você não apertou o botão nos últimos 3 segundos
+  if (httpResponseCode > 0 && !comandoManual && (millis() - ultimoClique > 3000))
+  {
     String resposta = http.getString();
-    StaticJsonDocument<256> resDoc;
+    JsonDocument resDoc;
     deserializeJson(resDoc, resposta);
 
-    if (resDoc.containsKey("modoGlobal")) {
+    if (resDoc.containsKey("modoGlobal"))
+    {
       String modoServidor = resDoc["modoGlobal"];
       bool novoEstado = (modoServidor == "ATIVA");
-      if (novoEstado != aulaAtiva) {
+      if (novoEstado != aulaAtiva)
+      {
         aulaAtiva = novoEstado;
         atualizarSaidasFisicas();
       }
@@ -124,3 +161,4 @@ void enviarTelemetria(bool comandoManual) {
   }
   http.end();
 }
+

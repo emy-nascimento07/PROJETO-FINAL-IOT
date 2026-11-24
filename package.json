@@ -1,26 +1,22 @@
 {
-  "name": "projeto-final",
+  "name": "desafio-telemetria",
   "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/emy-nascimento07/PROJETO-FINAL-IOT.git"
-  },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/emy-nascimento07/PROJETO-FINAL-IOT/issues"
-  },
-  "homepage": "https://github.com/emy-nascimento07/PROJETO-FINAL-IOT#readme",
+  "description": "Este repositório contém a estrutura base de um projeto PlatformIO para VS Code, pronto para ser utilizado nas aulas práticas da disciplina de Internet das Coisas (IoT).",
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.3.0"
-  }
+  },
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "type": "commonjs"
 }
